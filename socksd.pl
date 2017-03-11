@@ -5,18 +5,12 @@ use Socket;
 use Mojo::IOLoop;
 use IO::Socket::Socks qw/:constants $SOCKS_ERROR/;
 
-my @configs = ({
-    proxy_addr        => '127.0.0.1',
-    proxy_port        => 12345,
-    bind_source_addr  => '192.168.0.60'
-  }, {
-    proxy_addr        => '127.0.0.1',
-    proxy_port        => 12346,
-    bind_source_addr  => '192.168.88.253'
-  }
-);
+# Config
+my $config = do 'socksd.conf';
+die "Invalid config file: $@\n"    if $@;
+die "Can't read config file: $!\n" if $!;
 
-for my $config (@configs) {
+for my $config (@{$config->{listen}}) {
   my $server = IO::Socket::Socks->new(
     ProxyAddr => $config->{proxy_addr}, ProxyPort => $config->{proxy_port}, Blocking => 0, SocksDebug => 0,
     SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1) or die $SOCKS_ERROR;
@@ -24,8 +18,6 @@ for my $config (@configs) {
 }
 
 Mojo::IOLoop->start;
-
-#$server->close();
 
 sub server_accept {
   my ($server, $bind_source_addr) = @_;
