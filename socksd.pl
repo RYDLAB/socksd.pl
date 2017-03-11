@@ -18,7 +18,7 @@ my @configs = ({
 
 for my $config (@configs) {
   my $server = IO::Socket::Socks->new(
-    ProxyAddr => $config->{proxy_addr}, ProxyPort => $config->{proxy_port}, Blocking => 0, SocksDebug => 1,
+    ProxyAddr => $config->{proxy_addr}, ProxyPort => $config->{proxy_port}, Blocking => 0, SocksDebug => 0,
     SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1) or die $SOCKS_ERROR;
   Mojo::IOLoop->singleton->reactor->io($server => sub { &server_accept($server, $config->{bind_source_addr}) })->watch($server, 1, 0);
 }
