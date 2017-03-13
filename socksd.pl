@@ -3,6 +3,8 @@ use Mojo::Base -strict;
 
 use Socket;
 use Mojo::IOLoop;
+use Mojo::Log;
+use Scalar::Util 'refaddr';
 use IO::Socket::Socks qw/:constants $SOCKS_ERROR/;
 
 # Config
@@ -10,11 +12,17 @@ my $config = do 'socksd.conf';
 die "Invalid config file: $@\n"    if $@;
 die "Can't read config file: $!\n" if $!;
 
-for my $config (@{$config->{listen}}) {
+my $log = Mojo::Log->new(level => $config->{log}{level} // 'warn', $config->{log}{path} ? (path => $config->{log}{path}) : ());
+$log->format(sub {
+  my ($time, $level, $client) = splice @_, 0, 3;
+  return '[' . localtime($time) . '] [' . $level . '] [' . refaddr($client) . '] ' . join "\n", @_, '';
+});
+
+for my $proxy (@{$config->{listen}}) {
   my $server = IO::Socket::Socks->new(
-    ProxyAddr => $config->{proxy_addr}, ProxyPort => $config->{proxy_port}, Blocking => 0, SocksDebug => 0,
+    ProxyAddr => $proxy->{proxy_addr}, ProxyPort => $proxy->{proxy_port}, Blocking => 0, SocksDebug => 0,
     SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1) or die $SOCKS_ERROR;
-  Mojo::IOLoop->singleton->reactor->io($server => sub { &server_accept($server, $config->{bind_source_addr}) })->watch($server, 1, 0);
+  Mojo::IOLoop->singleton->reactor->io($server => sub { &server_accept($server, $proxy->{bind_source_addr}) })->watch($server, 1, 0);
 }
 
 Mojo::IOLoop->start;
@@ -22,6 +30,8 @@ Mojo::IOLoop->start;
 sub server_accept {
   my ($server, $bind_source_addr) = @_;
   return unless my $client = $server->accept;
+
+  $log->debug($client, 'accept new connection from ' . $client->peerhost);
 
   $client->blocking(0);
   Mojo::IOLoop->singleton->reactor->io($client, sub {
@@ -35,7 +45,8 @@ sub server_accept {
     if ($cmd == CMD_CONNECT) {
       &foreign_connect($bind_source_addr, $client, $host, $port);
     } else {
-      warn 'UNSUPPORTED METHOD';
+      $log->warn($client, 'unsupported method, number ' . $cmd);
+      $client->close;
     }
 
   })->watch($client, 1, 0);
@@ -48,31 +59,38 @@ sub foreign_connect {
     my ($loop, $err, $foreign_stream) = @_;
 
     if ($err) {
+      $log->warn($client, 'remote connection failed with error: ' . $err);
       $client->command_reply($client->version == 4 ? REQUEST_FAILED : REPLY_HOST_UNREACHABLE, $host, $port);
       $client->close();
       return;
     }
 
+    $log->debug($client, 'remote connection established');
     $client->command_reply($client->version == 4 ? REQUEST_GRANTED : REPLY_SUCCESS, $foreign_stream->handle->sockhost, $foreign_stream->handle->sockport);
 
     my $client_stream = Mojo::IOLoop::Stream->new($client);
 
-    &io_streams($client_stream, $foreign_stream);
-    &io_streams($foreign_stream, $client_stream);
+    &io_streams($client, $client_stream, $foreign_stream);
+    &io_streams($client, $foreign_stream, $client_stream);
 
     $client_stream->start;
   });
 }
 
 sub io_streams {
-  my ($stream1, $stream2) = @_;
+  my ($client, $stream1, $stream2) = @_;
+
+  my $is_client = $client == $stream1->handle ? 1 : 0;
 
   $stream1->on('close' => sub {
+    $log->debug($client, $is_client ? 'client close connection' : 'remote host close connection');
     $stream2->close;
     undef $stream2;
   });
 
   $stream1->on('error' => sub {
+    my ($stream, $err) = @_;
+    $log->warn($client, 'remote connection failed with error: ' . $err);
     $stream2->close;
     undef $stream2;
   });
