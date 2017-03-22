@@ -52,7 +52,7 @@ sub server_accept {
       $client->close;
     }
 
-  })->watch($client, 1, 0);
+  })->watch($client, 1, 1);
 }
 
 sub foreign_connect {
