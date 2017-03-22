@@ -20,8 +20,9 @@ $log->format(sub {
 
 for my $proxy (@{$config->{listen}}) {
   my $server = IO::Socket::Socks->new(
-    ProxyAddr => $proxy->{proxy_addr}, ProxyPort => $proxy->{proxy_port}, Blocking => 0, SocksDebug => 0,
+    ProxyAddr => $proxy->{proxy_addr}, ProxyPort => $proxy->{proxy_port}, SocksDebug => 0,
     SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1) or die $SOCKS_ERROR;
+  $server->blocking(0);
   Mojo::IOLoop->singleton->reactor->io($server => sub { &server_accept($server, $proxy->{bind_source_addr}) })->watch($server, 1, 0);
 }
 
