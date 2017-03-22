@@ -39,7 +39,15 @@ sub server_accept {
   $client->blocking(0);
   Mojo::IOLoop->singleton->reactor->io($client, sub {
     my ($reactor, $is_w) = @_;
-    return unless $client->ready();
+
+    my $is_ready = $client->ready();
+    return if !$is_ready && ($SOCKS_ERROR == SOCKS_WANT_READ || $SOCKS_ERROR == SOCKS_WANT_WRITE);
+
+    if (!$is_ready) {
+      $log->warn($info->{id}, 'client connection failed with error: ' . $SOCKS_ERROR);
+      $reactor->remove($client);
+      return $client->close;
+    }
 
     $reactor->remove($client);
 
