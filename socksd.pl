@@ -70,7 +70,7 @@ sub foreign_connect {
     my ($loop, $err, $foreign_stream) = @_;
 
     if ($err) {
-      $log->warn($info->{id}, 'remote connection failed with error: ' . $err);
+      $log->warn($info->{id}, 'connect to remote host failed with error: ' . $err);
       $client->command_reply($client->version == 4 ? REQUEST_FAILED : REPLY_HOST_UNREACHABLE, $host, $port);
       $client->close();
       return;
