@@ -32,7 +32,7 @@ sub server_accept {
   return unless my $client = $server->accept;
 
   my ($time, $rand) = (time(), sprintf('%03d', int rand 1000));
-  my $info = {id => "${time}.$$.${rand}", start_time => $time};
+  my $info = {id => "${time}.$$.${rand}", start_time => $time, client_send => 0, remote_send => 0};
 
   $log->debug($info->{id}, 'accept new connection from ' . $client->peerhost);
 
@@ -95,7 +95,9 @@ sub io_streams {
   my ($info, $is_client, $stream1, $stream2) = @_;
 
   $stream1->on('close' => sub {
-    my $message = sprintf('%s close connection; duration %ss', ($is_client ? 'client' : 'remote host'), time() - $info->{start_time});
+    my $message = sprintf('%s close connection; duration %ss; bytes send %s',
+        ($is_client ? 'client' : 'remote host'), time() - $info->{start_time},
+        ($is_client ? $info->{client_send} : $info->{remote_send}));
     $log->debug($info->{id}, $message);
     $stream2->close;
     undef $stream2;
@@ -110,6 +112,7 @@ sub io_streams {
 
   $stream1->on('read' => sub {
     my ($stream, $bytes) = @_;
+    $is_client ? $info->{client_send} += length($bytes) : $info->{remote_send} += length($bytes);
     $stream2->write($bytes);
   });
 }
