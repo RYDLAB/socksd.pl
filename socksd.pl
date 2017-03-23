@@ -81,6 +81,9 @@ sub foreign_connect {
 
     my $client_stream = Mojo::IOLoop::Stream->new($client);
 
+    $foreign_stream->timeout(0);
+    $client_stream->timeout(0);
+
     &io_streams($info, 1, $client_stream, $foreign_stream);
     &io_streams($info, 0, $foreign_stream, $client_stream);
 
