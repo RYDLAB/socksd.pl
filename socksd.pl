@@ -1,7 +1,8 @@
 #!/usr/bin/perl
 use Mojo::Base -strict;
 
-use Socket;
+use Socket qw/getaddrinfo IPPROTO_TCP SOCK_STREAM AI_NUMERICHOST/;
+use IO::Socket::IP;
 use Mojo::IOLoop;
 use Mojo::Log;
 use IO::Socket::Socks qw/:constants $SOCKS_ERROR/;
@@ -17,7 +18,13 @@ $log->format(sub {
   return '[' . localtime($time) . '] [' . $level . '] [' . $id . '] ' . join "\n", @_, '';
 });
 
+my $local_addr_info = {};
+my $addrinfo_hints = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => AI_NUMERICHOST};
+
 for my $proxy (@{$config->{listen}}) {
+
+  $local_addr_info->{$proxy->{bind_source_addr}} = getaddrinfo($proxy->{bind_source_addr}, undef, $addrinfo_hints);
+
   my $server = IO::Socket::Socks->new(
     ProxyAddr => $proxy->{proxy_addr}, ProxyPort => $proxy->{proxy_port}, SocksDebug => 0, SocksResolve => 0,
     SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1) or die $SOCKS_ERROR;
@@ -66,7 +73,10 @@ sub server_accept {
 sub foreign_connect {
   my ($info, $bind_source_addr, $client, $host, $port) = @_;
 
-  my $id = Mojo::IOLoop->client(address => $host, port => $port, local_address => $bind_source_addr => sub {
+  my $peer_addr_info = getaddrinfo($host, $port, $addrinfo_hints);
+  my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => [$local_addr_info->{$bind_source_addr}], PeerAddrInfo => [$peer_addr_info]);
+
+  my $id = Mojo::IOLoop->client(handle => $handle => sub {
     my ($loop, $err, $foreign_stream) = @_;
 
     if ($err) {
