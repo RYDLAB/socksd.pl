@@ -20,15 +20,17 @@ $log->format(sub {
 
 $config->{resolve} //= 0;
 
-my $local_addr_info = {};
+my $local_addrinfo = {};
 my $local_addrinfo_hints  = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($config->{resolve} ? AI_PASSIVE : AI_NUMERICHOST | AI_PASSIVE)};
 my $remote_addrinfo_hints = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($config->{resolve} ? 0 : AI_NUMERICHOST)};
 
 for my $proxy (@{$config->{listen}}) {
 
-  my ($err, $addrinfo) = getaddrinfo($proxy->{bind_source_addr}, undef, $local_addrinfo_hints);
-  die "getaddrinfo error: $err" if $err;
-  $local_addr_info->{$proxy->{bind_source_addr}} = $addrinfo;
+  if ($proxy->{bind_source_addr}) {
+    my ($err, $addrinfo) = getaddrinfo($proxy->{bind_source_addr}, undef, $local_addrinfo_hints);
+    die "getaddrinfo error: $err" if $err;
+    $local_addrinfo->{$proxy->{bind_source_addr}} = $addrinfo;
+  }
 
   my $server = IO::Socket::Socks->new(
     ProxyAddr => $proxy->{proxy_addr}, ProxyPort => $proxy->{proxy_port}, SocksDebug => 0, SocksResolve => $config->{resolve},
@@ -83,13 +85,15 @@ sub server_accept {
 sub foreign_connect {
   my ($info, $bind_source_addr, $client, $host, $port) = @_;
 
-  my ($err, $peer_addr_info) = getaddrinfo($host, $port, $remote_addrinfo_hints);
+  my ($err, $peer_addrinfo) = getaddrinfo($host, $port, $remote_addrinfo_hints);
   if ($err) {
     $log->warn($info->{id}, 'getaddrinfo error: ' . $err);
     return $client->close();
   }
 
-  my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => [$local_addr_info->{$bind_source_addr}], PeerAddrInfo => [$peer_addr_info]);
+  my $current_local_addrinfo = $bind_source_addr ? [$local_addrinfo->{$bind_source_addr}] : undef;
+
+  my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => $current_local_addrinfo, PeerAddrInfo => [$peer_addrinfo]);
 
   my $id = Mojo::IOLoop->client(handle => $handle => sub {
     my ($loop, $err, $foreign_stream) = @_;
