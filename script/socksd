@@ -1,0 +1,38 @@
+#!perl
+use Mojo::Base -strict;
+
+use Getopt::Long;
+use Pod::Usage 'pod2usage';
+use App::Socksd::Server;
+
+my $config_file = 'socksd.conf';
+GetOptions
+    'c|config=s' => \$config_file,
+    'h|help'     => \my $help;
+
+pod2usage if $help;
+
+# Config
+my $config = do $config_file;
+die "Invalid config file: $@\n"    if $@;
+die "Can't read config file: $!\n" if $!;
+
+App::Socksd::Server->new(config => $config)->run;
+
+__END__
+
+=encoding utf8
+
+=head1 NAME
+
+socksd - Simple non-blocking socks4, socks5 server
+
+=head1 SYNOPSIS
+
+  socksd [OPTIONS]
+
+  Options:
+    -c,  --config <path>  Path to config file
+    -h,  --help           Show help message
+
+=cut
