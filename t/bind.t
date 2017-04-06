@@ -5,10 +5,12 @@ use Mojo::IOLoop;
 use App::Socksd::Server;
 
 my $proxy = App::Socksd::Server->new(config => {
-  listen => [{proxy_addr => '127.0.0.1', proxy_port => 12345, bind_source_addr => '127.0.0.2'}]
+  listen => [{proxy_addr => '127.0.0.1', bind_source_addr => '127.0.0.2'}]
 })->start;
 
-Mojo::IOLoop->server({port => 54321} => sub {
+my $socks_port = $proxy->{handles}[0]->sockport;
+
+my $s_id = Mojo::IOLoop->server({address => '127.0.0.1'} => sub {
   my ($loop, $stream) = @_;
 
   $stream->on(read => sub {
@@ -19,7 +21,9 @@ Mojo::IOLoop->server({port => 54321} => sub {
   });
 });
 
-Mojo::IOLoop->client({socks_address => '127.0.0.1', socks_port => 12345, address => '127.0.0.1', port => 54321} => sub {
+my $server_port = Mojo::IOLoop->acceptor($s_id)->port;
+
+Mojo::IOLoop->client({socks_address => '127.0.0.1', socks_port => $socks_port, address => '127.0.0.1', port => $server_port} => sub {
   my ($loop, $err, $stream) = @_;
 
   $stream->on(read => sub {
