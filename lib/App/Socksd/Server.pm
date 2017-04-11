@@ -4,10 +4,14 @@ use Mojo::Base -base;
 use Socket qw/getaddrinfo IPPROTO_TCP SOCK_STREAM AI_NUMERICHOST AI_PASSIVE/;
 use IO::Socket::IP;
 use Mojo::IOLoop;
+use Mojo::IOLoop::Client;
 use Mojo::Log;
+use Scalar::Util 'weaken';
 use IO::Socket::Socks qw/:constants $SOCKS_ERROR/;
+use Mojo::Loader qw(load_class);
 
 has 'log';
+has 'plugin';
 
 sub new {
   my $self = shift->SUPER::new(@_);
@@ -24,6 +28,18 @@ sub new {
   $self->{local_addrinfo} = {};
   $self->{local_addrinfo_hints}  = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($self->{resolve} ? AI_PASSIVE : AI_NUMERICHOST | AI_PASSIVE)};
   $self->{remote_addrinfo_hints} = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($self->{resolve} ? 0 : AI_NUMERICHOST)};
+
+  if (my $class = $self->{config}{plugin_class}) {
+    unshift @INC, $self->{config}{lib_path} if $self->{config}{lib_path};
+    # eval {
+    #   require App::Socksd::Plugin::Base;
+    #   App::Socksd::Plugin::Base->import();
+    #   1;
+    # };
+    die $_ if $_ = load_class $class;
+    $self->{plugin} = $class->new(server => $self);
+    weaken $self->{plugin}{server};
+  }
 
   return $self;
 }
@@ -69,6 +85,13 @@ sub _server_accept {
 
   $self->log->debug($info->{id}, 'accept new connection from ' . $client->peerhost);
 
+  my $is_permit = 1;
+  $is_permit = $self->plugin->client_accept($client) if $self->plugin;
+  unless ($is_permit) {
+    $self->log->info($info->{id}, 'block client from ' . $client->peerhost);
+    return $client->close;
+  }
+
   $client->blocking(0);
   Mojo::IOLoop->singleton->reactor->io($client, sub {
     my ($reactor, $is_w) = @_;
@@ -104,39 +127,77 @@ sub _server_accept {
 sub _foreign_connect {
   my ($self, $info, $bind_source_addr, $client, $host, $port) = @_;
 
+  my $is_permit = 1;
+  ($host, $port, $is_permit) = $self->plugin->client_connect($client, $host, $port) if $self->plugin;
+
+  unless ($is_permit) {
+    $self->log->info($info->{id}, "not allowed client to connect to $host:$port");
+    return $client->close;
+  }
+
   my ($err, $peer_addrinfo) = getaddrinfo($host, $port, $self->{remote_addrinfo_hints});
   if ($err) {
     $self->log->warn($info->{id}, 'getaddrinfo error: ' . $err);
-    return $client->close();
+    return $client->close;
   }
 
   my $current_local_addrinfo = $bind_source_addr ? [$self->{local_addrinfo}{$bind_source_addr}] : undef;
 
   my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => $current_local_addrinfo, PeerAddrInfo => [$peer_addrinfo]);
 
-  my $id = Mojo::IOLoop->client(handle => $handle => sub {
-    my ($loop, $err, $foreign_stream) = @_;
+  my $remote_host = Mojo::IOLoop::Client->new;
+  $self->{remotes}{client}{$remote_host} = $remote_host;
 
-    if ($err) {
-      $self->log->warn($info->{id}, 'connect to remote host failed with error: ' . $err);
-      $client->command_reply($client->version == 4 ? REQUEST_FAILED : REPLY_HOST_UNREACHABLE, $host, $port);
-      $client->close();
-      return;
-    }
+  $remote_host->on(connect => sub {
+    my ($remote_host, $remote_host_handle) = @_;
+
+    delete $self->{remotes}{client}{$remote_host};
 
     $self->log->debug($info->{id}, 'remote connection established');
-    $client->command_reply($client->version == 4 ? REQUEST_GRANTED : REPLY_SUCCESS, $foreign_stream->handle->sockhost, $foreign_stream->handle->sockport);
+    $client->command_reply($client->version == 4 ? REQUEST_GRANTED : REPLY_SUCCESS, $remote_host_handle->sockhost, $remote_host_handle->sockport);
 
-    my $client_stream = Mojo::IOLoop::Stream->new($client);
-
-    $foreign_stream->timeout(0);
-    $client_stream->timeout(0);
-
-    $self->_io_streams($info, 1, $client_stream, $foreign_stream);
-    $self->_io_streams($info, 0, $foreign_stream, $client_stream);
-
-    $client_stream->start;
+    if ($self->plugin) {
+      Mojo::IOLoop->timer(2 => sub { $self->plugin->upgrade_sockets($info, $client, $remote_host_handle) })
+    } else {
+      $self->watch_handles(undef, $info, $client, $remote_host_handle);
+    }
   });
+
+  $remote_host->on(error => sub {
+    my ($remote_host, $err) = @_;
+
+    delete $self->{remotes}{client}{$remote_host};
+
+    $self->log->warn($info->{id}, 'connect to remote host failed with error: ' . $err);
+    $client->command_reply($client->version == 4 ? REQUEST_FAILED : REPLY_HOST_UNREACHABLE, $host, $port);
+
+    $client->close;
+  });
+
+  $remote_host->connect(handle => $handle);
+}
+
+sub watch_handles {
+  my ($self, $error, $info, $client, $remote) = @_;
+
+  if ($error) {
+    $self->log->warn($info->{id}, "upgrade socket failed with error: $error");
+    $client->close;
+    $remote->close;
+    return;
+  }
+
+  my $client_stream = Mojo::IOLoop::Stream->new($client);
+  my $remote_stream = Mojo::IOLoop::Stream->new($remote);
+
+  $client_stream->timeout(0);
+  $remote_stream->timeout(0);
+
+  $self->_io_streams($info, 1, $client_stream, $remote_stream);
+  $self->_io_streams($info, 0, $remote_stream, $client_stream);
+
+  $client_stream->start;
+  $remote_stream->start;
 }
 
 sub _io_streams {
@@ -160,6 +221,7 @@ sub _io_streams {
 
   $stream1->on('read' => sub {
     my ($stream, $bytes) = @_;
+    $bytes = $self->plugin->read($stream1->handle, $bytes) if $self->plugin;
     $is_client ? $info->{client_send} += length($bytes) : $info->{remote_send} += length($bytes);
     $stream2->write($bytes);
   });
