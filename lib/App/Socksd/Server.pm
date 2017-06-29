@@ -24,6 +24,7 @@ sub new {
   $self->{log} = $log;
 
   $self->{resolve} = $self->{config}{resolve} // 0;
+  $self->{auth} = $self->{config}{auth};
 
   $self->{local_addrinfo} = {};
   $self->{local_addrinfo_hints}  = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($self->{resolve} ? AI_PASSIVE : AI_NUMERICHOST | AI_PASSIVE)};
@@ -64,10 +65,19 @@ sub _listen {
 
   my $server = IO::Socket::Socks->new(
     ProxyAddr => $proxy->{proxy_addr}, ProxyPort => $proxy->{proxy_port}, SocksDebug => 0, SocksResolve => $self->{resolve},
-    SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1) or die $SOCKS_ERROR;
+    SocksVersion => [4, 5], Listen => SOMAXCONN, ReuseAddr => 1, ReusePort => 1,
+    UserAuth => sub { $self->_auth(@_) }, RequireAuth => $self->{auth} ? 1 : 0) or die $SOCKS_ERROR;
   push @{$self->{handles}}, $server;
   $server->blocking(0);
   Mojo::IOLoop->singleton->reactor->io($server => sub { $self->_server_accept($server, $proxy->{bind_source_addr}) })->watch($server, 1, 0);
+}
+
+sub _auth {
+  my ($self, $user, $pass) = @_;
+  return 1 unless $self->{auth};
+  return 1 if (ref $self->{auth} eq 'HASH') && ($self->{auth}{$user // ''} // '') eq ($pass // '');
+  return $self->plugin->auth($user, $pass) if $self->plugin;
+  return 0;
 }
 
 sub _server_accept {

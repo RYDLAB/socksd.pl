@@ -11,4 +11,6 @@ sub upgrade_sockets {
 
 sub read { $_[2] }
 
+sub auth { 1 }
+
 1;
