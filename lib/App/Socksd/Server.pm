@@ -31,14 +31,8 @@ sub new {
 
   if (my $class = $self->{config}{plugin_class}) {
     unshift @INC, $self->{config}{lib_path} if $self->{config}{lib_path};
-    # eval {
-    #   require App::Socksd::Plugin::Base;
-    #   App::Socksd::Plugin::Base->import();
-    #   1;
-    # };
     die $_ if $_ = load_class $class;
-    $self->{plugin} = $class->new(server => $self);
-    weaken $self->{plugin}{server};
+    $self->{plugin} = $class->new;
   }
 
   return $self;
@@ -157,7 +151,10 @@ sub _foreign_connect {
     $client->command_reply($client->version == 4 ? REQUEST_GRANTED : REPLY_SUCCESS, $remote_host_handle->sockhost, $remote_host_handle->sockport);
 
     if ($self->plugin) {
-      Mojo::IOLoop->timer(2 => sub { $self->plugin->upgrade_sockets($info, $client, $remote_host_handle) })
+      $self->plugin->upgrade_sockets($client, $remote_host_handle, sub {
+        my ($err, $client, $remote) = @_;
+        $self->watch_handles($err, $info, $client, $remote);
+      });
     } else {
       $self->watch_handles(undef, $info, $client, $remote_host_handle);
     }

@@ -2,25 +2,33 @@ package App::Socksd::Plugin::TLS;
 use Mojo::Base 'App::Socksd::Plugin::Base';
 
 use Mojo::IOLoop::TLS;
+use IO::Socket::SSL;
+use Mojo::IOLoop;
+
+#$IO::Socket::SSL::DEBUG = 3;
 
 sub upgrade_sockets {
-  shift->_upgrade_client(@_)
+  my ($self, $client, $remote, $cb) = @_;
+
+  Mojo::IOLoop->delay(
+    sub {
+      my $d = shift;
+      $self->_upgrade_handle($client, 1, $d->begin(0));
+      $self->_upgrade_handle($remote, 0, $d->begin(0));
+    },
+    sub {
+      my ($d, $err1, $client, $err2, $remote) = @_;
+      $cb->($err1 || $err2, $client, $remote);
+    }
+  );
 }
 
-sub _upgrade_client {
-  my ($self, $info, $client, $remote) = @_;
-  my $tls_client = Mojo::IOLoop::TLS->new($client);
-  $tls_client->on(upgrade => sub { $self->_upgrade_remote($info, pop(), $remote) });
-  $tls_client->on(error   => sub { warn 111; $self->server->watch_handles(pop(), $info, $client, $remote) });
-  $tls_client->negotiate(server => 1, tls_cert => '/home/logioniz/cert/cert.pem', tls_key => '/home/logioniz/cert/key.pem');
-}
-
-sub _upgrade_remote {
-  my ($self, $info, $client, $remote) = @_;
-  my $tls_remote = Mojo::IOLoop::TLS->new($remote);
-  $tls_remote->on(upgrade => sub { $self->server->watch_handles(undef, $info, $client, pop()) });
-  $tls_remote->on(error   => sub { warn 222; $self->server->watch_handles(pop(), $info, $client, $remote) });
-  $tls_remote->negotiate;
+sub _upgrade_handle {
+  my ($self, $handle, $is_server, $cb) = @_;
+  my $tls = Mojo::IOLoop::TLS->new($handle);
+  $tls->on(upgrade => sub { $cb->(undef, $_[1]) });
+  $tls->on(error   => sub { $cb->($_[1], undef) });
+  $tls->negotiate(server => $is_server);
 }
 
 1;
