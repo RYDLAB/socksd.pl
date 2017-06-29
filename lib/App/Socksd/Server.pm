@@ -226,9 +226,10 @@ sub _io_streams {
     undef $stream2;
   });
 
+  my $handle1 = $stream1->handle;
   $stream1->on('read' => sub {
     my ($stream, $bytes) = @_;
-    $bytes = $self->plugin->read($stream1->handle, $bytes) if $self->plugin;
+    $bytes = $self->plugin->read($handle1, $bytes) if $self->plugin;
     $is_client ? $info->{client_send} += length($bytes) : $info->{remote_send} += length($bytes);
     $stream2->write($bytes);
   });
