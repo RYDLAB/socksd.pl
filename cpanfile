@@ -1,3 +1,3 @@
 requires 'EV';
-requires 'Mojolicious';
+requires 'Mojolicious'          => '7.34';
 requires 'IO::Socket::Socks';
