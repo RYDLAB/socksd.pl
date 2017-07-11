@@ -12,6 +12,7 @@ use Mojo::Loader qw(load_class);
 
 has 'log';
 has 'plugin';
+has 'socks_handshake_timeout' => sub { $ENV{SOCKS_HANDSHAKE_TIMEOUT} || 10 };
 
 sub new {
   my $self = shift->SUPER::new(@_);
@@ -97,17 +98,29 @@ sub _server_accept {
   }
 
   $client->blocking(0);
+
+  $info->{handshake_timeout} = Mojo::IOLoop->singleton->timer($self->socks_handshake_timeout => sub {
+    $self->log->warn($info->{id}, 'socks handshake timeout');
+    shift->reactor->remove($client);
+    $client->close;
+  });
+
   Mojo::IOLoop->singleton->reactor->io($client, sub {
     my ($reactor, $is_w) = @_;
 
     my $is_ready = $client->ready();
-    return if !$is_ready && ($SOCKS_ERROR == SOCKS_WANT_READ || $SOCKS_ERROR == SOCKS_WANT_WRITE);
 
-    if (!$is_ready) {
+    unless ($is_ready) {
+      return $reactor->watch($client, 1, 0) if $SOCKS_ERROR == SOCKS_WANT_READ;
+      return $reactor->watch($client, 0, 1) if $SOCKS_ERROR == SOCKS_WANT_WRITE;
+
       $self->log->warn($info->{id}, 'client connection failed with error: ' . $SOCKS_ERROR);
+      Mojo::IOLoop->singleton->remove($info->{handshake_timeout});
       $reactor->remove($client);
       return $client->close;
     }
+
+    Mojo::IOLoop->singleton->remove($info->{handshake_timeout});
 
     $reactor->remove($client);
 
@@ -124,8 +137,7 @@ sub _server_accept {
       $self->log->warn($info->{id}, 'unsupported method, number ' . $cmd);
       $client->close;
     }
-
-  })->watch($client, 1, 1);
+  });
 }
 
 sub _foreign_connect {
