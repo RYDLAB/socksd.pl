@@ -45,9 +45,9 @@ sub start {
 
   for my $proxy (@{$self->{config}{listen}}) {
     if ($proxy->{bind_source_addr}) {
-      my ($err, $addrinfo) = getaddrinfo($proxy->{bind_source_addr}, undef, $self->{local_addrinfo_hints});
+      my ($err, @addrinfo) = getaddrinfo($proxy->{bind_source_addr}, undef, $self->{local_addrinfo_hints});
       die "getaddrinfo error: $err" if $err;
-      $self->{local_addrinfo}{$proxy->{bind_source_addr}} = $addrinfo;
+      $self->{local_addrinfo}{$proxy->{bind_source_addr}} = \@addrinfo;
     }
 
     $self->_listen($proxy);
@@ -157,7 +157,7 @@ sub _foreign_connect {
     return $client->close;
   }
 
-  my $current_local_addrinfo = $bind_source_addr ? [$self->{local_addrinfo}{$bind_source_addr}] : undef;
+  my $current_local_addrinfo = $bind_source_addr ? $self->{local_addrinfo}{$bind_source_addr} : undef;
 
   my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => $current_local_addrinfo, PeerAddrInfo => \@peer_addrinfo);
 
