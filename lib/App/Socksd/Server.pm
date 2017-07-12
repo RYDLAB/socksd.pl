@@ -151,7 +151,7 @@ sub _foreign_connect {
     return $client->close;
   }
 
-  my ($err, $peer_addrinfo) = getaddrinfo($host, $port, $self->{remote_addrinfo_hints});
+  my ($err, @peer_addrinfo) = getaddrinfo($host, $port, $self->{remote_addrinfo_hints});
   if ($err) {
     $self->log->warn($info->{id}, 'getaddrinfo error: ' . $err);
     return $client->close;
@@ -159,7 +159,7 @@ sub _foreign_connect {
 
   my $current_local_addrinfo = $bind_source_addr ? [$self->{local_addrinfo}{$bind_source_addr}] : undef;
 
-  my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => $current_local_addrinfo, PeerAddrInfo => [$peer_addrinfo]);
+  my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => $current_local_addrinfo, PeerAddrInfo => \@peer_addrinfo);
 
   my $remote_host = Mojo::IOLoop::Client->new;
   $self->{remotes}{client}{$remote_host} = $remote_host;
