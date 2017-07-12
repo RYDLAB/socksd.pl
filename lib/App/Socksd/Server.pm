@@ -74,21 +74,21 @@ sub _server_accept {
   return unless my $client = $server->accept;
 
   my ($time, $rand) = (time(), sprintf('%03d', int rand 1000));
-  my $info = {id => "${time}.$$.${rand}", start_time => $time, client_send => 0, remote_send => 0};
+  my $state = {id => "${time}.$$.${rand}", start_time => $time, client_send => 0, remote_send => 0};
 
-  $self->log->debug($info->{id}, 'accept new connection from ' . $client->peerhost);
+  $self->log->debug($state->{id}, 'accept new connection from ' . $client->peerhost);
 
   my $is_permit = 1;
   $is_permit = $self->plugin->client_accept($client) if $self->plugin;
   unless ($is_permit) {
-    $self->log->info($info->{id}, 'block client from ' . $client->peerhost);
+    $self->log->info($state->{id}, 'block client from ' . $client->peerhost);
     return $client->close;
   }
 
   $client->blocking(0);
 
-  $info->{handshake_timeout} = Mojo::IOLoop->singleton->timer($self->socks_handshake_timeout => sub {
-    $self->log->warn($info->{id}, 'socks handshake timeout');
+  $state->{handshake_timeout} = Mojo::IOLoop->singleton->timer($self->socks_handshake_timeout => sub {
+    $self->log->warn($state->{id}, 'socks handshake timeout');
     shift->reactor->remove($client);
     $client->close;
   });
@@ -102,40 +102,40 @@ sub _server_accept {
       return $reactor->watch($client, 1, 0) if $SOCKS_ERROR == SOCKS_WANT_READ;
       return $reactor->watch($client, 0, 1) if $SOCKS_ERROR == SOCKS_WANT_WRITE;
 
-      $self->log->warn($info->{id}, 'client connection failed with error: ' . $SOCKS_ERROR);
-      Mojo::IOLoop->singleton->remove($info->{handshake_timeout});
+      $self->log->warn($state->{id}, 'client connection failed with error: ' . $SOCKS_ERROR);
+      Mojo::IOLoop->singleton->remove($state->{handshake_timeout});
       $reactor->remove($client);
       return $client->close;
     }
 
-    Mojo::IOLoop->singleton->remove($info->{handshake_timeout});
+    Mojo::IOLoop->singleton->remove($state->{handshake_timeout});
 
     $reactor->remove($client);
 
     my ($cmd, $host, $port) = @{$client->command};
 
     if (!$self->{resolve} && $host =~ m/[^\d.]/) {
-      $self->log->warn($info->{id}, 'proxy dns off, see configuration parameter "resolve"');
+      $self->log->warn($state->{id}, 'proxy dns off, see configuration parameter "resolve"');
       return $client->close;
     }
 
     if ($cmd == CMD_CONNECT) {
-      $self->_foreign_connect($info, $bind_source_addr, $client, $host, $port);
+      $self->_foreign_connect($state, $bind_source_addr, $client, $host, $port);
     } else {
-      $self->log->warn($info->{id}, 'unsupported method, number ' . $cmd);
+      $self->log->warn($state->{id}, 'unsupported method, number ' . $cmd);
       $client->close;
     }
   });
 }
 
 sub _foreign_connect {
-  my ($self, $info, $bind_source_addr, $client, $host, $port) = @_;
+  my ($self, $state, $bind_source_addr, $client, $host, $port) = @_;
 
   my $is_permit = 1;
   ($host, $port, $is_permit) = $self->plugin->client_connect($client, $host, $port) if $self->plugin;
 
   unless ($is_permit) {
-    $self->log->info($info->{id}, "not allowed client to connect to $host:$port");
+    $self->log->info($state->{id}, "not allowed client to connect to $host:$port");
     return $client->close;
   }
 
@@ -147,16 +147,16 @@ sub _foreign_connect {
 
     delete $self->{remotes}{client}{$remote_host};
 
-    $self->log->debug($info->{id}, 'remote connection established');
+    $self->log->debug($state->{id}, 'remote connection established');
     $client->command_reply($client->version == 4 ? REQUEST_GRANTED : REPLY_SUCCESS, $remote_host_handle->sockhost, $remote_host_handle->sockport);
 
     if ($self->plugin) {
       $self->plugin->upgrade_sockets($client, $remote_host_handle, sub {
         my ($err, $client, $remote) = @_;
-        $self->watch_handles($err, $info, $client, $remote);
+        $self->watch_handles($err, $state, $client, $remote);
       });
     } else {
-      $self->watch_handles(undef, $info, $client, $remote_host_handle);
+      $self->watch_handles(undef, $state, $client, $remote_host_handle);
     }
   });
 
@@ -165,7 +165,7 @@ sub _foreign_connect {
 
     delete $self->{remotes}{client}{$remote_host};
 
-    $self->log->warn($info->{id}, 'connect to remote host failed with error: ' . $err);
+    $self->log->warn($state->{id}, 'connect to remote host failed with error: ' . $err);
     $client->command_reply($client->version == 4 ? REQUEST_FAILED : REPLY_HOST_UNREACHABLE, $host, $port);
 
     $client->close;
@@ -175,10 +175,10 @@ sub _foreign_connect {
 }
 
 sub watch_handles {
-  my ($self, $error, $info, $client, $remote) = @_;
+  my ($self, $error, $state, $client, $remote) = @_;
 
   if ($error) {
-    $self->log->warn($info->{id}, "upgrade socket failed with error: $error");
+    $self->log->warn($state->{id}, "upgrade socket failed with error: $error");
     $client->close;
     $remote->close;
     return;
@@ -190,28 +190,28 @@ sub watch_handles {
   $client_stream->timeout(0);
   $remote_stream->timeout(0);
 
-  $self->_io_streams($info, 1, $client_stream, $remote_stream);
-  $self->_io_streams($info, 0, $remote_stream, $client_stream);
+  $self->_io_streams($state, 1, $client_stream, $remote_stream);
+  $self->_io_streams($state, 0, $remote_stream, $client_stream);
 
   $client_stream->start;
   $remote_stream->start;
 }
 
 sub _io_streams {
-  my ($self, $info, $is_client, $stream1, $stream2) = @_;
+  my ($self, $state, $is_client, $stream1, $stream2) = @_;
 
   $stream1->on('close' => sub {
     my $message = sprintf('%s close connection; duration %ss; bytes send %s',
-        ($is_client ? 'client' : 'remote host'), time() - $info->{start_time},
-        ($is_client ? $info->{client_send} : $info->{remote_send}));
-    $self->log->debug($info->{id}, $message);
+        ($is_client ? 'client' : 'remote host'), time() - $state->{start_time},
+        ($is_client ? $state->{client_send} : $state->{remote_send}));
+    $self->log->debug($state->{id}, $message);
     $stream2->close;
     undef $stream2;
   });
 
   $stream1->on('error' => sub {
     my ($stream, $err) = @_;
-    $self->log->warn($info->{id}, 'remote connection failed with error: ' . $err);
+    $self->log->warn($state->{id}, 'remote connection failed with error: ' . $err);
     $stream2->close;
     undef $stream2;
   });
@@ -220,7 +220,7 @@ sub _io_streams {
   $stream1->on('read' => sub {
     my ($stream, $bytes) = @_;
     $bytes = $self->plugin->read($handle1, $bytes) if $self->plugin;
-    $is_client ? $info->{client_send} += length($bytes) : $info->{remote_send} += length($bytes);
+    $is_client ? $state->{client_send} += length($bytes) : $state->{remote_send} += length($bytes);
     $stream2->write($bytes);
   });
 }
