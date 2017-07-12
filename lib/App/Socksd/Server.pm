@@ -1,12 +1,10 @@
 package App::Socksd::Server;
 use Mojo::Base -base;
 
-use Socket qw/getaddrinfo IPPROTO_TCP SOCK_STREAM AI_NUMERICHOST AI_PASSIVE/;
-use IO::Socket::IP;
+use Socket;
 use Mojo::IOLoop;
 use Mojo::IOLoop::Client;
 use Mojo::Log;
-use Scalar::Util 'weaken';
 use IO::Socket::Socks qw/:constants $SOCKS_ERROR/;
 use Mojo::Loader qw(load_class);
 
@@ -27,10 +25,6 @@ sub new {
   $self->{resolve} = $self->{config}{resolve} // 0;
   $self->{auth} = $self->{config}{auth};
 
-  $self->{local_addrinfo} = {};
-  $self->{local_addrinfo_hints}  = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($self->{resolve} ? AI_PASSIVE : AI_NUMERICHOST | AI_PASSIVE)};
-  $self->{remote_addrinfo_hints} = {socktype => SOCK_STREAM, protocol => IPPROTO_TCP, flags => ($self->{resolve} ? 0 : AI_NUMERICHOST)};
-
   if (my $class = $self->{config}{plugin_class}) {
     unshift @INC, $self->{config}{lib_path} if $self->{config}{lib_path};
     die $_ if $_ = load_class $class;
@@ -44,12 +38,6 @@ sub start {
   my $self = shift;
 
   for my $proxy (@{$self->{config}{listen}}) {
-    if ($proxy->{bind_source_addr}) {
-      my ($err, @addrinfo) = getaddrinfo($proxy->{bind_source_addr}, undef, $self->{local_addrinfo_hints});
-      die "getaddrinfo error: $err" if $err;
-      $self->{local_addrinfo}{$proxy->{bind_source_addr}} = \@addrinfo;
-    }
-
     $self->_listen($proxy);
   }
 
@@ -151,16 +139,6 @@ sub _foreign_connect {
     return $client->close;
   }
 
-  my ($err, @peer_addrinfo) = getaddrinfo($host, $port, $self->{remote_addrinfo_hints});
-  if ($err) {
-    $self->log->warn($info->{id}, 'getaddrinfo error: ' . $err);
-    return $client->close;
-  }
-
-  my $current_local_addrinfo = $bind_source_addr ? $self->{local_addrinfo}{$bind_source_addr} : undef;
-
-  my $handle = IO::Socket::IP->new(Blocking => 0, LocalAddrInfo => $current_local_addrinfo, PeerAddrInfo => \@peer_addrinfo);
-
   my $remote_host = Mojo::IOLoop::Client->new;
   $self->{remotes}{client}{$remote_host} = $remote_host;
 
@@ -193,7 +171,7 @@ sub _foreign_connect {
     $client->close;
   });
 
-  $remote_host->connect(handle => $handle);
+  $remote_host->connect(address => $host, port => $port, local_address => $bind_source_addr);
 }
 
 sub watch_handles {
