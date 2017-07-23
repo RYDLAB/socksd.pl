@@ -151,7 +151,7 @@ sub _foreign_connect {
     $client->command_reply($client->version == 4 ? REQUEST_GRANTED : REPLY_SUCCESS, $remote_host_handle->sockhost, $remote_host_handle->sockport);
 
     if ($self->plugin) {
-      $self->plugin->upgrade_sockets($client, $remote_host_handle, sub {
+      $self->plugin->upgrade_sockets($client, $remote_host_handle, {remote_host => $host}, sub {
         my ($err, $client, $remote) = @_;
         $self->watch_handles($err, $state, $client, $remote);
       });
